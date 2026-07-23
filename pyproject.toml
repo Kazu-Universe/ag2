@@ -337,15 +337,22 @@ skip-excluded-dirs = true
 exclude = ["/test", "/notebook"]
 
 [tool.hatch.build.targets.wheel]
+# hep-theory fork fix: only-include previously listed
+# "autogen/agentchat/contrib/captainagent/tools" a second time even though
+# it's already covered by the "autogen" entry above (packages = ["autogen"]
+# recursively includes everything underneath, and no exclude rule anywhere
+# in this file targets that subdirectory) - hatchling then tried to add
+# every file under it to the wheel twice, crashing with "A second file is
+# being added to the wheel archive at the same path" on
+# autogen/agentchat/contrib/captainagent/tools/README.md. The paired
+# [tool.hatch.build.targets.wheel.sources] entries below were both
+# identity mappings (source path == destination path) serving no renaming
+# purpose, so removed along with the redundant only-include entry.
 packages = ["autogen"]
-only-include = ["autogen", "autogen/agentchat/contrib/captainagent/tools"]
+only-include = ["autogen"]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["test", "notebook"]
-
-[tool.hatch.build.targets.wheel.sources]
-"autogen" = "autogen"
-"autogen/agentchat/contrib/captainagent/tools" = "autogen/agentchat/contrib/captainagent/tools"
 
 [tool.pytest.ini_options]
 addopts = '--cov=autogen --cov-append --cov-branch --cov-report=xml -m "not conda"'
