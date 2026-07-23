@@ -353,7 +353,23 @@ class AnthropicClient:
                 if response.stop_reason == "tool_use":
                     anthropic_finish = "tool_calls"
                     for content in response.content:
-                        if type(content) == ToolUseBlock:
+                        # hep-theory fork: use the API's own "type" discriminator
+                        # field instead of a strict `type(content) == ToolUseBlock`
+                        # check. The strict check is fragile across anthropic SDK/
+                        # model versions - e.g. a content block that is genuinely a
+                        # tool use (content.type == "tool_use") can come back
+                        # wrapped in a class that isn't exactly the ToolUseBlock
+                        # symbol imported here (a beta/typed variant, a subclass,
+                        # or a rebuilt pydantic model under a different module
+                        # path), causing the strict check to silently miss it.
+                        # When that happened, tool_calls stayed [] (not None)
+                        # despite stop_reason == "tool_use", and client.py's
+                        # `tool_calls is not None` check then passed a message
+                        # with an empty-but-present "tool_calls" list all the way
+                        # through to AG2's group tool executor, which crashes
+                        # with UnboundLocalError (it assumes a non-empty list
+                        # whenever the key is present at all).
+                        if getattr(content, "type", None) == "tool_use":
                             tool_calls.append(
                                 ChatCompletionMessageToolCall(
                                     id=content.id,
@@ -361,13 +377,37 @@ class AnthropicClient:
                                     type="function",
                                 )
                             )
+
+                    # hep-theory fork: defensive fallback. If the API says
+                    # stop_reason == "tool_use" but nothing above was recognized
+                    # as a tool-use block (e.g. an as-yet-unseen content block
+                    # shape), don't silently forward an empty-but-present
+                    # tool_calls list downstream - it crashes the group tool
+                    # executor with an unhelpful UnboundLocalError. Surface it
+                    # loudly instead and fall back to a text-only message so the
+                    # run can at least continue and be retried, rather than
+                    # crashing the whole process.
+                    if not tool_calls:
+                        import warnings as _warnings
+                        _warnings.warn(
+                            f"Anthropic response for model {anthropic_params.get('model')} "
+                            "had stop_reason='tool_use' but no content block was "
+                            "recognized as a tool call. Treating this turn as if no "
+                            "tool call was made - this usually means a new content "
+                            "block shape isn't handled yet and needs investigating.",
+                            UserWarning,
+                        )
+                        tool_calls = None
                 else:
                     anthropic_finish = "stop"
                     tool_calls = None
 
                 # Retrieve any text content from the response
                 for content in response.content:
-                    if type(content) == TextBlock:
+                    # hep-theory fork: same robustness fix as above - use the
+                    # "type" discriminator instead of a strict class-identity
+                    # check, for the same reasons.
+                    if getattr(content, "type", None) == "text":
                         message_text = content.text
                         break
 
