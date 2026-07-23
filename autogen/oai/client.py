@@ -1065,7 +1065,17 @@ class OpenAIWrapper:
         if not context or template is None:
             return template  # type: ignore [return-value]
         if isinstance(template, str):
-            return template.format(**context) if allow_format_str_template else template
+            # hep-theory fork: safe template formatting - missing context keys
+            # (e.g. agent YAML prompts referencing {current_code_output} or
+            # {inspirehep_context} when that variable was never populated,
+            # because no code ran yet or no literature agent was used this step)
+            # resolve to an empty string instead of raising KeyError.
+            if allow_format_str_template:
+                class _SafeDict(dict):
+                    def __missing__(self, key):
+                        return ""
+                return template.format_map(_SafeDict(context))
+            return template
         return template(context)
 
     def _construct_create_params(self, create_config: dict[str, Any], extra_kwargs: dict[str, Any]) -> dict[str, Any]:

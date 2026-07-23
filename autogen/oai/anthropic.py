@@ -305,6 +305,26 @@ class AnthropicClient:
             anthropic_params["system"] = params["system"]
         if "tools" in params:
             anthropic_params["tools"] = params["tools"]
+        # hep-theory fork fix: params["tool_choice"] was being silently
+        # dropped here - never copied into anthropic_params at all, so a
+        # forced tool_choice (used by terminator, plan_recorder,
+        # review_recorder, etc.) never reached the Anthropic API call.
+        # ag2 builds tool_choice in OpenAI's schema unconditionally:
+        # {"type": "function", "function": {"name": X}}. Anthropic's
+        # forced-single-tool schema ({"type": "tool", "name": X}) was
+        # never implemented here. Without this, any agent using a forced
+        # tool_choice gets no forcing at all when backed by a
+        # Claude/Fable model - not even a 400, just silently ignored.
+        if "tool_choice" in params:
+            tc = params["tool_choice"]
+            if isinstance(tc, dict) and tc.get("type") == "function":
+                fn = tc.get("function", {})
+                name = fn.get("name") if isinstance(fn, dict) else None
+                if name:
+                    anthropic_params["tool_choice"] = {"type": "tool", "name": name}
+            elif isinstance(tc, dict) and tc.get("type") == "tool":
+                # Already in Anthropic's own schema - pass through as-is.
+                anthropic_params["tool_choice"] = tc
         if anthropic_params["top_k"] is None:
             del anthropic_params["top_k"]
         if anthropic_params["top_p"] is None:
@@ -350,6 +370,34 @@ class AnthropicClient:
                     if type(content) == TextBlock:
                         message_text = content.text
                         break
+
+                # hep-theory fork: surfaced silent max_tokens truncation.
+                # Previously, a response cut off at the token limit before
+                # any TextBlock or completed ToolUseBlock existed produced
+                # a totally empty {'content': '', 'tool_calls': None}
+                # message with no error - deep_research() would finish
+                # cleanly as if the turn had succeeded. Make this loud
+                # instead: if nothing usable was extracted and the stop
+                # reason was max_tokens, say so explicitly in the message
+                # content and emit a warning, so it is visible in the
+                # transcript and in stdout rather than silently swallowed.
+                if not message_text and not tool_calls and response.stop_reason == "max_tokens":
+                    import warnings as _warnings
+                    _warnings.warn(
+                        f"Anthropic response for model {anthropic_params.get('model')} "
+                        f"was truncated at max_tokens ({anthropic_params.get('max_tokens')}) "
+                        "before any usable text or tool call was produced. "
+                        "This turn's output is lost - consider raising max_tokens "
+                        "or splitting the task into smaller sub-steps.",
+                        UserWarning,
+                    )
+                    message_text = (
+                        "[TRUNCATED: this response hit the max_tokens limit "
+                        f"({anthropic_params.get('max_tokens')}) before producing any "
+                        "usable text or a complete tool call. No content was recovered. "
+                        "This turn must be retried, ideally with a smaller sub-task or "
+                        "a higher max_tokens setting.]"
+                    )
 
         # Calculate and save the cost onto the response
         prompt_tokens = response.usage.input_tokens
@@ -694,7 +742,11 @@ def oai_messages_to_anthropic_messages(params: dict[str, Any]) -> list[dict[str,
 
     # Note: When using reflection_with_llm we may end up with an "assistant" message as the last message and that may cause a blank response
     # So, if the last role is not user, add a 'user' continue message at the end
-    if processed_messages[-1]["role"] != "user":
+    # hep-theory fork: empty processed_messages fix - an empty list trivially
+    # doesn't end in "user", so it should get the continue message appended,
+    # not crash with IndexError (happens during forced-termination sequences
+    # at max_rounds).
+    if not processed_messages or processed_messages[-1]["role"] != "user":
         processed_messages.append(user_continue_message)
 
     return processed_messages
