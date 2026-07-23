@@ -1,0 +1,41 @@
+diff --git a/autogen/agentchat/group/group_tool_executor.py b/autogen/agentchat/group/group_tool_executor.py
+index 1f50e09..45e4c74 100644
+--- a/autogen/agentchat/group/group_tool_executor.py
++++ b/autogen/agentchat/group/group_tool_executor.py
+@@ -149,6 +149,36 @@ class GroupToolExecutor(ConversableAgent):
+         if "tool_calls" in message:
+             tool_call_count = len(message["tool_calls"])
+ 
++            # hep-theory fork: defensive guard. An empty-but-present
++            # "tool_calls" list (i.e. the key exists but len() == 0) used to
++            # crash here with UnboundLocalError, since tool_message is only
++            # ever assigned inside the loop below - zero iterations means it
++            # stays unbound. Treat this the same as "no tool_calls key at
++            # all" (the normal text-only-reply case a few lines below
++            # already handles via `return False, None`) instead of crashing
++            # the whole run. Also surface exactly what produced it, since as
++            # of this writing the upstream cause isn't fully understood - an
++            # anthropic.py fix for one suspected cause (a content block not
++            # recognized as a tool call) did not make this stop happening,
++            # so something else is producing this shape too.
++            if tool_call_count == 0:
++                import warnings as _warnings
++                import json as _json
++                sender_name = getattr(sender, "name", sender)
++                agent_name = getattr(agent, "name", agent)
++                try:
++                    message_preview = _json.dumps(message, default=str)[:2000]
++                except Exception:
++                    message_preview = repr(message)[:2000]
++                _warnings.warn(
++                    "hep-theory fork diagnostic: _generate_group_tool_reply "
++                    f"received a message with an empty (but present) "
++                    f"tool_calls list. agent={agent_name!r} sender={sender_name!r} "
++                    f"message={message_preview}",
++                    UserWarning,
++                )
++                return False, None
++
+             # Loop through tool calls individually (so context can be updated after each function call)
+             next_target: Optional[TransitionTarget] = None
+             tool_responses_inner = []
