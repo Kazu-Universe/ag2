@@ -2215,6 +2215,11 @@ class ConversableAgent(LLMAgent):
             config = self
         if messages is None:
             messages = self._oai_messages[sender]
+        # hep-theory fork: empty messages guard - hitting max_rounds or
+        # other edge cases can leave this sender's message history empty;
+        # decline to reply rather than crashing with IndexError.
+        if not messages:
+            return False, None
         message = messages[-1]
         if message.get("function_call"):
             call_id = message.get("id", None)
@@ -2253,6 +2258,11 @@ class ConversableAgent(LLMAgent):
             config = self
         if messages is None:
             messages = self._oai_messages[sender]
+        # hep-theory fork: empty messages guard - hitting max_rounds or
+        # other edge cases can leave this sender's message history empty;
+        # decline to reply rather than crashing with IndexError.
+        if not messages:
+            return False, None
         message = messages[-1]
         if "function_call" in message:
             call_id = message.get("id", None)
@@ -2281,6 +2291,11 @@ class ConversableAgent(LLMAgent):
             config = self
         if messages is None:
             messages = self._oai_messages[sender]
+        # hep-theory fork: empty messages guard - hitting max_rounds or
+        # other edge cases can leave this sender's message history empty;
+        # decline to reply rather than crashing with IndexError.
+        if not messages:
+            return False, None
         message = messages[-1]
         tool_returns = []
         for tool_call in message.get("tool_calls", []):
@@ -2349,6 +2364,11 @@ class ConversableAgent(LLMAgent):
             config = self
         if messages is None:
             messages = self._oai_messages[sender]
+        # hep-theory fork: empty messages guard - hitting max_rounds or
+        # other edge cases can leave this sender's message history empty;
+        # decline to reply rather than crashing with IndexError.
+        if not messages:
+            return False, None
         message = messages[-1]
         async_tool_calls = []
         for tool_call in message.get("tool_calls", []):
@@ -2392,6 +2412,11 @@ class ConversableAgent(LLMAgent):
             config = self
         if messages is None:
             messages = self._oai_messages[sender] if sender else []
+        # hep-theory fork: empty messages guard - hitting max_rounds or
+        # other edge cases can leave this sender's message history empty;
+        # decline to reply rather than crashing with IndexError.
+        if not messages:
+            return False, None
         message = messages[-1]
         reply = ""
         no_human_input_msg = ""
