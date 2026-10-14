@@ -9,6 +9,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import os
 import re
 import sys
 import uuid
@@ -231,6 +232,40 @@ AOPENAI_FALLBACK_KWARGS = {
     "base_url",
     "project",
 }
+
+
+def _cmbagent_write_call_log(client: Any, agent: Any) -> None:
+    """hep-theory fork: append the per-call usage record to ``$CMBAGENT_CALL_LOG``.
+
+    ``AnthropicClient.create`` leaves its record on the client; clients that
+    don't (every non-Anthropic one) are skipped. Adds the timestamp, the
+    process id, the calling agent's name (None for callers that pass no
+    agent) and the current plan step, read from
+    ``agent.context_variables["current_plan_step_number"]`` (None if the agent
+    has no context variables or no such key). Never raises: a write failure
+    only emits a warning.
+
+    Single-threaded assumption: one pending record is kept per client, so
+    this relies on calls being made one at a time (cmbagent runs its agents
+    sequentially, each normally with its own client). Overlapping calls on one
+    shared client could mix their records up; if that path ever appears, key
+    the record by thread or pass it back with the response instead.
+    """
+    record = client.__dict__.pop("_cmbagent_last_call", None) if hasattr(client, "__dict__") else None
+    if not isinstance(record, dict):
+        return
+    try:
+        import time
+
+        try:
+            step = agent.context_variables.get("current_plan_step_number")
+        except Exception:
+            step = None
+        record = {"ts": time.time(), "pid": os.getpid(), "agent": getattr(agent, "name", None), "step": step, **record}
+        with open(os.environ["CMBAGENT_CALL_LOG"], "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+    except Exception as e:
+        warnings.warn(f"CMBAGENT_CALL_LOG write failed ({e!r}); call logging skipped for this call.", UserWarning)
 
 
 @lru_cache(maxsize=128)
@@ -1273,7 +1308,14 @@ class OpenAIWrapper:
    
                     
                 request_ts = get_current_ts()
-                response = client.create(params)
+                try:
+                    response = client.create(params)
+                finally:
+                    # hep-theory fork: per-call usage log (inert unless CMBAGENT_CALL_LOG is set).
+                    # In a finally so a call that was billed and then raised while handling the
+                    # response is still logged; the writer never raises, so it cannot mask that error.
+                    if os.environ.get("CMBAGENT_CALL_LOG"):
+                        _cmbagent_write_call_log(client, agent)
                 # cmbagent debug
                 if cmbagent_debug:
                     print('\n\n in oai/client.py response: ', response)

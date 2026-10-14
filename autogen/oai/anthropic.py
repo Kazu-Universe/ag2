@@ -336,6 +336,12 @@ class AnthropicClient:
 
         response = self._client.messages.create(**anthropic_params)
 
+        # hep-theory fork: per-call usage log (Phase 0 of docs/prompt_caching_plan.md;
+        # inert unless CMBAGENT_CALL_LOG is set). Read-only observer: it only builds
+        # a record from the request/response; client.py writes it out with the agent name.
+        if os.environ.get("CMBAGENT_CALL_LOG"):
+            self._cmbagent_last_call = _cmbagent_call_record(anthropic_params, response)
+
         tool_calls = []
         message_text = ""
 
@@ -790,6 +796,51 @@ def oai_messages_to_anthropic_messages(params: dict[str, Any]) -> list[dict[str,
         processed_messages.append(user_continue_message)
 
     return processed_messages
+
+
+def _cmbagent_call_record(params: dict[str, Any], response: Any) -> dict[str, Any]:
+    """hep-theory fork: per-call usage log record (Phase 0 of the caching plan).
+
+    Pure observer: reads ``params`` and ``response`` and never mutates them.
+    Token counts are recorded only if they are real ints (a mocked or absent
+    usage field gives ``None``). Hashes cover the full system block, the tools
+    list, the first message and the ``thinking`` / ``tool_choice`` options (all
+    of which take part in cache validity), so prefix changes between calls are
+    visible. Never raises: on any failure it returns ``{"error": repr(e)}``.
+    """
+    try:
+        import hashlib
+
+        def _h(obj: Any) -> Optional[str]:
+            if obj is None:
+                return None
+            s = obj if isinstance(obj, str) else json.dumps(obj, sort_keys=True, default=str)
+            return hashlib.sha256(s.encode("utf-8", "replace")).hexdigest()[:16]
+
+        usage = getattr(response, "usage", None)
+
+        def _tokens(name: str) -> Optional[int]:
+            v = getattr(usage, name, None)
+            return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+        system = params.get("system", "")
+        messages = params.get("messages") or []
+        return {
+            "model": params.get("model"),
+            "input_tokens": _tokens("input_tokens"),
+            "cache_creation_input_tokens": _tokens("cache_creation_input_tokens"),
+            "cache_read_input_tokens": _tokens("cache_read_input_tokens"),
+            "output_tokens": _tokens("output_tokens"),
+            "system_sha256": _h(system),
+            "system_chars": len(system) if isinstance(system, str) else len(json.dumps(system, default=str)),
+            "tools_sha256": _h(params.get("tools")),
+            "cache_opts_sha256": _h({"thinking": params.get("thinking"), "tool_choice": params.get("tool_choice")}),
+            "n_messages": len(messages),
+            "first_msg_sha256": _h(messages[0]) if messages else None,
+            "stop_reason": getattr(response, "stop_reason", None),
+        }
+    except Exception as e:  # never let logging affect a call
+        return {"error": repr(e)}
 
 
 def _calculate_cost(input_tokens: int, output_tokens: int, model: str) -> float:
